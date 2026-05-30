@@ -1,0 +1,19 @@
+# Node
+frontend/node_modules
+
+# Build
+**/bin
+**/obj
+**/dist
+
+# Env
+ml-service/myenv/
+.env
+**/.env
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
