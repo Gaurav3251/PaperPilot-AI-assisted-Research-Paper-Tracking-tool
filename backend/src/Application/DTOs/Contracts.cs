@@ -23,8 +23,13 @@ public record PaperDto(
     string? Authors,
     int? Year,
     string? Venue,
+    string? Doi,
+    string? PaperUrl,
     string? Status,
+    string? PdfUrl,
+    string? ThumbUrl,
     int Priority,
+    Guid? CategoryId,
     bool AiGenerated,
     IReadOnlyList<string> Tags
 );

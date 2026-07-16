@@ -13,10 +13,10 @@ export function LoginPage() {
   const [password, setPassword] = useState('')
   const [fullName, setFullName] = useState('')
   const [role, setRole] = useState('User')
-  const [resetToken, setResetToken] = useState('')
-  const [newPassword, setNewPassword] = useState('')
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
+
+  const [isSendingReset, setIsSendingReset] = useState(false)
 
   const submitAuth = async (e) => {
     e.preventDefault()
@@ -44,28 +44,22 @@ export function LoginPage() {
   })()
 
   const requestReset = async () => {
-    setError(''); setMessage('')
-    try {
-      const { data } = await api.post(`${authPrefix}/forgot-password`, { email })
-      if (!data?.token) {
-        setMessage('If account exists, reset process initiated.')
-      } else {
-        setResetToken(data.token)
-        setMessage('Reset token generated. Paste token and set new password.')
-      }
-    } catch (err) {
-      setError(err?.response?.data?.error || 'Could not request reset')
+    setError('')
+    setMessage('')
+    if (!email?.trim()) {
+      setError('Email is required')
+      return
     }
-  }
 
-  const doReset = async () => {
-    setError(''); setMessage('')
     try {
-      await api.post(`${authPrefix}/reset-password`, { email, token: resetToken, newPassword })
-      setMessage('Password updated. You can login now.')
+      setIsSendingReset(true)
+      await api.post(`${authPrefix}/forgot-password`, { email })
+      setMessage('If an account exists for that email, a reset link has been sent.')
       setMode('login')
     } catch (err) {
-      setError(err?.response?.data?.error || 'Reset failed')
+      setError(err?.response?.data?.error || 'Could not request reset')
+    } finally {
+      setIsSendingReset(false)
     }
   }
 
@@ -98,10 +92,17 @@ export function LoginPage() {
 
         {mode === 'forgot' && (
           <div className="reset-box">
-            <button type="button" className="btn btn-light" onClick={requestReset}>Generate Reset Token</button>
-            <input value={resetToken} onChange={(e) => setResetToken(e.target.value)} placeholder="Reset token" />
-            <input value={newPassword} type="password" onChange={(e) => setNewPassword(e.target.value)} placeholder="New password" />
-            <button type="button" className="btn" onClick={doReset}>Reset Password</button>
+            <button
+              type="button"
+              className="btn btn-light"
+              onClick={requestReset}
+              disabled={isSendingReset}
+            >
+              {isSendingReset ? 'Sending…' : 'Send reset link'}
+            </button>
+            <p style={{ marginTop: '10px', color: '#666', fontSize: '0.95em' }}>
+              Check your email for the reset link.
+            </p>
           </div>
         )}
 

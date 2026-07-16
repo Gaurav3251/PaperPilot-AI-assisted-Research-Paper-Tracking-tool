@@ -3,9 +3,11 @@ using Application.Interfaces;
 using Domain.Entities;
 using Infrastructure.Data;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using System.Security.Claims;
+using Microsoft.Extensions.Configuration;
 
 namespace API.Controllers;
 
@@ -14,7 +16,15 @@ namespace API.Controllers;
 public class AuthController : ControllerBase
 {
     private readonly IAuthService _auth;
-    public AuthController(IAuthService auth) => _auth = auth;
+    private readonly IEmailSender _emailSender;
+    private readonly IConfiguration _config;
+
+    public AuthController(IAuthService auth, IEmailSender emailSender, IConfiguration config)
+    {
+        _auth = auth;
+        _emailSender = emailSender;
+        _config = config;
+    }
 
     [HttpPost("register")]
     public async Task<IActionResult> Register(RegisterRequest request) => Ok(await _auth.RegisterAsync(request));
@@ -25,15 +35,41 @@ public class AuthController : ControllerBase
     [HttpPost("forgot-password")]
     public async Task<IActionResult> ForgotPassword(ForgotPasswordRequest request)
     {
-        var token = await _auth.GeneratePasswordResetTokenAsync(request);
-        if (string.IsNullOrEmpty(token))
+        var email = request.Email?.Trim();
+        var token = string.IsNullOrWhiteSpace(email) ? string.Empty : await _auth.GeneratePasswordResetTokenAsync(request);
+
+        // Avoid user enumeration: always return success, even if token generation failed.
+        if (!string.IsNullOrEmpty(token))
         {
-            // Helps debugging during development: indicates the user/email wasn't found.
-            // (In production, you may want to avoid revealing account existence.)
-            return BadRequest(new { error = "Could not generate reset token (user not found)." });
+            var frontendUrl = _config["FrontendUrl"]?.TrimEnd('/') ?? "";
+            var resetLink = $"{frontendUrl}/reset-password?email={Uri.EscapeDataString(email)}&token={Uri.EscapeDataString(token)}";
+
+            try
+            {
+                await _emailSender.SendEmailAsync(
+                    toEmail: email,
+                    subject: "PaperPilot - Reset your password",
+                    htmlBody: $@"
+                        <div>
+                        <p>You requested a password reset.</p>
+                        <p><a href='{resetLink}'>Reset password</a></p>
+                        <p>If you didn’t request this, you can ignore this email.</p>
+                        </div>"
+                );
+                Console.WriteLine($"[forgot-password] Reset email sent to {email}");
+            }
+            catch (Exception ex)
+            {
+                // Log but still return the generic success response — never leak SMTP errors to the client.
+                Console.WriteLine($"[forgot-password] FAILED to send reset email to {email}: {ex.Message}");
+            }
+        }
+        else
+        {
+            Console.WriteLine($"[forgot-password] No matching account for '{email}' — no email sent.");
         }
 
-        return Ok(new { token });
+        return Ok(new { message = "If an account with that email exists, a reset link has been sent." });
     }
 
     [HttpPost("reset-password")]
@@ -58,7 +94,12 @@ public class AuthController : ControllerBase
 public class PapersController : ControllerBase
 {
     private readonly IPaperService _papers;
-    public PapersController(IPaperService papers) => _papers = papers;
+    private readonly IWebHostEnvironment _env;
+    public PapersController(IPaperService papers, IWebHostEnvironment env)
+    {
+        _papers = papers;
+        _env = env;
+    }
     private Guid UserId => Guid.Parse(User.FindFirstValue(ClaimTypes.NameIdentifier)!);
 
     [HttpGet]
@@ -97,13 +138,30 @@ public class PapersController : ControllerBase
     public async Task<IActionResult> Upload(Guid id, IFormFile file)
     {
         if (file is null || file.Length == 0) return BadRequest(new { error = "Missing file" });
-        var uploads = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "uploads");
-        Directory.CreateDirectory(uploads);
+
         var ext = Path.GetExtension(file.FileName);
+        if (!string.Equals(ext, ".pdf", StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(file.ContentType, "application/pdf", StringComparison.OrdinalIgnoreCase))
+        {
+            return BadRequest(new { error = "Only PDF files are allowed" });
+        }
+
+        // Use IWebHostEnvironment.WebRootPath (falls back to ContentRootPath/wwwroot) instead of
+        // Directory.GetCurrentDirectory(), which is unreliable across hosting setups (IIS, systemd,
+        // Docker, or `dotnet run` invoked from a different working directory).
+        var webRoot = string.IsNullOrEmpty(_env.WebRootPath)
+            ? Path.Combine(_env.ContentRootPath, "wwwroot")
+            : _env.WebRootPath;
+        var uploads = Path.Combine(webRoot, "uploads");
+        Directory.CreateDirectory(uploads);
+
         var safeName = $"{Guid.NewGuid():N}{ext}";
         var path = Path.Combine(uploads, safeName);
-        await using var stream = System.IO.File.Create(path);
-        await file.CopyToAsync(stream);
+        await using (var stream = System.IO.File.Create(path))
+        {
+            await file.CopyToAsync(stream);
+        }
+
         var fileUrl = $"/uploads/{safeName}";
         var updated = await _papers.UploadPdfAsync(UserId, id, fileUrl);
         return updated is null ? NotFound() : Ok(updated);

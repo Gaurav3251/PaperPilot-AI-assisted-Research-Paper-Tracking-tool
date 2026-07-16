@@ -80,7 +80,12 @@ public class PaperService : IPaperService
         if (paper is null) return null;
 
         paper.Title = dto.Title; paper.Abstract = dto.Abstract; paper.Authors = dto.Authors; paper.Year = dto.Year;
-        paper.Venue = dto.Venue; paper.Doi = dto.Doi; paper.PaperUrl = dto.PaperUrl; paper.PdfUrl = dto.PdfUrl;
+        paper.Venue = dto.Venue;
+        paper.Doi = dto.Doi;
+        paper.PaperUrl = dto.PaperUrl;
+        // Don't wipe existing PdfUrl during edits when client sends null
+        if (!string.IsNullOrWhiteSpace(dto.PdfUrl))
+            paper.PdfUrl = dto.PdfUrl;
         paper.Priority = dto.Priority; paper.CategoryId = dto.CategoryId; paper.UpdatedAt = DateTime.UtcNow;
         if (Enum.TryParse<PaperStatus>(dto.Status, true, out var status)) paper.Status = status;
 
@@ -110,10 +115,17 @@ public class PaperService : IPaperService
     {
         var paper = await _db.Papers.FirstOrDefaultAsync(p => p.Id == paperId && p.UserId == userId);
         if (paper is null) return null;
+
         paper.PdfUrl = fileUrl;
         paper.UpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync();
-        return await _db.Papers.Where(p => p.Id == paper.Id).Include(p => p.PaperTags).ThenInclude(pt => pt.Tag).Select(Map).FirstAsync();
+
+        return await _db.Papers
+            .Where(p => p.Id == paper.Id)
+            .Include(p => p.PaperTags)
+            .ThenInclude(pt => pt.Tag)
+            .Select(Map)
+            .FirstAsync();
     }
 
     private async Task AttachTagsAsync(Guid userId, Paper paper, List<string>? tags)
@@ -139,8 +151,13 @@ public class PaperService : IPaperService
         p.Authors,
         p.Year,
         p.Venue,
+        p.Doi,
+        p.PaperUrl,
         p.Status.ToString(),
+        p.PdfUrl,
+        null,
         p.Priority,
+        p.CategoryId,
         p.AiGenerated,
         p.PaperTags.Select(pt => pt.Tag.Name).ToList()
     );
